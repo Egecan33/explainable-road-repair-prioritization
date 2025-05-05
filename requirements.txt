@@ -1,0 +1,12 @@
+streamlit
+osmnx>=1.7.0
+networkx
+pandas
+geopandas
+numpy
+scikit-learn
+folium
+shap
+pyyaml
+folium
+streamlit-folium
