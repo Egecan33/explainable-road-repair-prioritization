@@ -10,3 +10,6 @@ shap
 pyyaml
 folium
 streamlit-folium
+streamlit-aggrid
+xgboost
+shap

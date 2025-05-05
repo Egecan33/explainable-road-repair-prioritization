@@ -37,14 +37,3 @@ streamlit run src/app.py
 
 *Created: 2025-04-06*
 
-
-python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-# fetch OSM graph
-python src/data_ingest.py
-# make some fake hospitals/shelters/population
-python src/metadata_simulation.py
-# (optional) start a damage-event loop in another terminal
-python src/damage_simulation.py
-# launch the dashboard
-streamlit run src/app.py

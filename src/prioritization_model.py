@@ -5,11 +5,12 @@ from pathlib import Path
 import pandas as pd
 import yaml
 from data_ingest import get_graph
-import networkx as nx
 from shapely.geometry import Point
 import geopandas as gpd
 from sklearn.tree import DecisionTreeRegressor
 import numpy as np
+import shap
+from xai import shap_to_text  # new helper
 
 CONFIG = yaml.safe_load(open(Path(__file__).resolve().parent.parent / "config.yml"))
 
@@ -72,47 +73,64 @@ def compute_features(G, poi):
     return pd.DataFrame(features)
 
 
+MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
+MODEL_PATH = MODELS_DIR / "priority_xgb.pkl"
+EXPLAINER_PATH = MODELS_DIR / "shap_explainer.pkl"
+
+
 def rank_roads():
     G = get_graph()
     poi = load_poi()
-    # compute betweenness centrality once and store
-    # For MultiGraph, keys are (u, v, k)
-    betweenness = nx.edge_betweenness_centrality(G, normalized=True, k=500)
-    for (u, v, k), c in betweenness.items():
-        G[u][v][k]["centrality"] = c
+
     # --------------------------------------------------
-    # Apply any externally-saved damage events
+    # Apply externally‑saved damage events (with direction fallback)
     events_path = Path(__file__).resolve().parent.parent / "data" / "events.json"
-    n_applied = 0
+    applied = 0
     if events_path.exists():
         with open(events_path) as f:
             events = json.load(f)
+
         for ev in events:
             if ev.get("event") != "damage":
                 continue
+
             u, v, k = ev["edge"]
             try:
                 k = int(k)
-            except (ValueError, TypeError):
+            except (TypeError, ValueError):
                 pass
+
+            # try u→v first, then v→u (graph is directed)
             if G.has_edge(u, v, key=k):
                 G[u][v][k]["status"] = "damaged"
                 G[u][v][k]["delay"] = ev.get("delay", 0)
-                n_applied += 1
-    print(f"[rank_roads] applied {n_applied} damage events")
+                applied += 1
+            elif G.has_edge(v, u, key=k):
+                G[v][u][k]["status"] = "damaged"
+                G[v][u][k]["delay"] = ev.get("delay", 0)
+                applied += 1
+
+    print(f"[rank_roads] applied {applied} damage events")
     # --------------------------------------------------
+
     feats = compute_features(G, poi)
     if feats.empty:
-        return pd.DataFrame()
-    # simple score
-    w = CONFIG["weights"]
-    feats["score"] = (
-        (1 / (feats["dist_hospital"] + 0.001)) * w["hospital_access"]
-        + feats["delay"] * w["population_density"]  # placeholder
-        + feats["centrality"] * w["network_centrality"]
+        return feats  # empty DF handled by app
+
+    model = pickle.load(open(MODEL_PATH, "rb"))
+    with open(EXPLAINER_PATH, "rb") as f:
+        explainer = pickle.load(f)
+
+    X = feats[["length_km", "delay", "centrality", "dist_hospital"]]
+    feats["score"] = model.predict(X)
+
+    # SHAP explanations → plain text
+    shap_vals = explainer(X)
+    feats["explanation"] = feats.apply(
+        lambda row, sv=shap_vals: shap_to_text(row.name, sv, X.columns), axis=1
     )
-    ranked = feats.sort_values("score", ascending=False)
-    return ranked
+
+    return feats.sort_values("score", ascending=False)
 
 
 if __name__ == "__main__":
